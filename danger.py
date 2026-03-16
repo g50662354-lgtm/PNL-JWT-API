@@ -1,9 +1,7 @@
-import os
-import json
 import time
 import requests
 from flask import Flask, request, jsonify
-from danger_ffjwt import guest_to_jwt  # only needed function
+from danger_ffjwt import guest_to_jwt
 
 app = Flask(__name__)
 
@@ -11,7 +9,7 @@ app = Flask(__name__)
 DEV_CREDIT = "@PNL_x_SRC"
 DEV_TELEGRAM = "t.me/PNL_CODEX"
 
-# ---------- Version fetching with simple TTL cache ----------
+# ---------- Version Cache ----------
 _versions_cache = {
     "ob_version": "OB52",
     "client_version": "1.120.1",
@@ -19,50 +17,51 @@ _versions_cache = {
 }
 
 def get_versions():
-    """Fetch latest OB & client versions from GitHub, cache for 1 hour."""
+    """Fetch latest versions with 1 hour cache"""
     global _versions_cache
     now = time.time()
+
     if now - _versions_cache["last_fetch"] > 3600:
         try:
             resp = requests.get(
                 "https://raw.githubusercontent.com/dangerapix/danger-ffjwt/main/versions.json",
-                timeout=5
+                timeout=3
             )
+
             if resp.status_code == 200:
                 data = resp.json()
+
                 _versions_cache["ob_version"] = data.get("ob_version", "OB52")
                 _versions_cache["client_version"] = data.get("client_version", "1.120.1")
                 _versions_cache["last_fetch"] = now
+
         except Exception:
-            # Keep existing/default versions on failure
             pass
+
     return _versions_cache["ob_version"], _versions_cache["client_version"]
 
-# ---------- Helper to add dev credit in response headers ----------
+
+# ---------- Add developer header ----------
 def add_dev_headers(response):
     response.headers["X-Developer"] = DEV_CREDIT
     return response
 
-# ---------- Routes ----------
+
+# ---------- Token Endpoint ----------
 @app.route('/token', methods=['GET'])
 def token_converter():
-    """
-    Convert Free Fire UID and password to a JWT token.
-    Required query parameters: uid, password
-    """
-    ob_ver, client_ver = get_versions()
+
     args = request.args
 
-    # Check for required parameters
-    if 'uid' not in args or 'password' not in args:
+    if "uid" not in args or "password" not in args:
         return add_dev_headers(jsonify({
             "success": False,
-            "error": "Missing parameters. Use ?uid=UID&password=PASSWORD",
+            "error": "Use ?uid=UID&password=PASSWORD",
             "credit": DEV_TELEGRAM
         })), 400
 
-    uid = args.get('uid').strip()
-    pwd = args.get('password').strip()
+    uid = args.get("uid").strip()
+    pwd = args.get("password").strip()
 
     if not uid or not pwd:
         return add_dev_headers(jsonify({
@@ -72,25 +71,54 @@ def token_converter():
         })), 400
 
     try:
-        result = guest_to_jwt(uid, pwd, ob_version=ob_ver, client_version=client_ver)
 
-        # Ensure result is a dict
+        ob_ver, client_ver = get_versions()
+
+        result = guest_to_jwt(
+            uid,
+            pwd,
+            ob_version=ob_ver,
+            client_version=client_ver
+        )
+
+        # Extract JWT token only
         if isinstance(result, dict):
-            # Add credit information to the response
-            result["credit"] = DEV_TELEGRAM
+            token = result.get("jwt_token")
         else:
-            # If result is not a dict (e.g., string), wrap it
-            result = {"success": True, "token": result, "credit": DEV_TELEGRAM}
+            token = result
 
-        return add_dev_headers(jsonify(result))
+        response = jsonify([
+            {
+                "token": token
+            }
+        ])
+
+        return add_dev_headers(response)
 
     except Exception as e:
+
         return add_dev_headers(jsonify({
             "success": False,
             "error": str(e),
             "credit": DEV_TELEGRAM
         })), 500
 
-# ---------- Local test ----------
+
+# ---------- Health Check ----------
+@app.route('/')
+def home():
+    return jsonify({
+        "api": "Free Fire Token API",
+        "developer": DEV_TELEGRAM,
+        "status": "running"
+    })
+
+
+# ---------- Run Server ----------
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(
+        host='0.0.0.0',
+        port=5000,
+        debug=False,
+        threaded=True
+                )
