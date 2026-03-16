@@ -87,11 +87,11 @@ def token_converter():
         else:
             token = result
 
-        response = jsonify([
+        response = jsonify(
             {
                 "token": token
             }
-        ])
+        )
 
         return add_dev_headers(response)
 
